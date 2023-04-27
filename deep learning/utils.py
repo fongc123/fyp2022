@@ -129,15 +129,86 @@ def train_model(model, train_loader, test_loader, optimizer, criterion, device=N
             train_loss.append(loss.item())
             train_acc.append((outputs.argmax(1) == labels).float().mean().item()) # running accuracy
 
-            # testing accuracy   
+            # testing accuracy
             model.eval()
             predictions, true = test_model(model, test_loader, device)
             test_acc.append((predictions == true).float().mean().item())
+
+            # print stats for each batch
+            if stats:
+                print(f"\t[B{len(train_loss)}]\tLoss {train_loss[-1]:.4f}, Train {train_acc[-1]:.4f}, Test {test_acc[-1]:.4f}")
 
         if stats:
             print(f"[E{epoch+1}]\tLoss {train_loss[-1]:.4f}, Train {train_acc[-1]:.4f}, Test {test_acc[-1]:.4f}")
     
     return train_loss, train_acc, test_acc
+
+def train_split_model(
+    model,
+    train_loader,
+    test_loader,
+    test_original_loader,
+    optimizer,
+    criterion,
+    nsplits=8,
+    device=None,
+    epochs=c.EPOCHS,
+    stats=False
+):
+    """
+    Train on split images and test on both split and original images.
+    
+    A majority vote is used to determine the class.
+
+    Arguments:
+    - model: model to train
+    - train_loader: data loader for training (split images as input)
+    - test_loader: data loader for testing on split images
+    - test_original_loader: data loader for testing on original images
+    - optimizer: optimizer to use
+    - criterion: loss function to use
+    - device: device to use for training
+    - epochs: number of epochs to train for
+    - stats: whether to print stats for each batch
+    """
+    train_loss = []
+    train_acc = []
+    test_acc = []
+    test_original_acc = []
+    for epoch in range(epochs):
+        for images, labels in train_loader:
+            model.train()
+            if device is not None:
+                images = images.to(device)
+                labels = labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            # training loss and accuracy
+            train_loss.append(loss.item())
+            train_acc.append((outputs.argmax(1) == labels).float().mean().item()) # running accuracy
+
+            # testing accuracy
+            model.eval()
+            predictions, true = test_model(model, test_loader, device)
+            test_acc.append((predictions == true).float().mean().item())
+
+            # testing accuracy on original test set (unsplit images)
+            predictions, true = test_split_model(model, test_original_loader, nsplits, device)
+            test_original_acc.append((predictions == true).float().mean().item())
+
+            # print stats for each batch
+            if stats:
+                print(f"\t[B{len(train_loss)}]\tLoss {train_loss[-1]:.4f}, Train {train_acc[-1]:.4f}, Test {test_acc[-1]:.4f}, Test Original {test_original_acc[-1]:.4f}")
+
+        if stats:
+            print(f"[E{epoch+1}]\tLoss {train_loss[-1]:.4f}, Train {train_acc[-1]:.4f}, Test {test_acc[-1]:.4f}, Test Original {test_original_acc[-1]:.4f}")
+    
+    return train_loss, train_acc, test_acc, test_original_acc
 
 def test_model(model, loader, device=None, save=False):
     predictions = torch.tensor([], dtype = torch.long).to(device)
@@ -153,6 +224,53 @@ def test_model(model, loader, device=None, save=False):
             outputs = model(images)
             _, predicted = torch.max(outputs.data, 1)
             predictions = torch.cat((predictions, predicted))
+            true = torch.cat((true, labels))
+
+    if save:
+        return predictions.cpu().numpy(), true.cpu().numpy()
+    else:
+        return predictions, true
+
+def test_split_model(model, loader, nsplits=8, device=None, save=False):
+    """
+    Test model using majority vote on split images
+
+    Arguments:
+    - model: trained model
+    - loader: test loader of original full-sized images
+    - device: device to use
+    - save: save predictions and true labels to file
+    """
+    predictions = torch.tensor([], dtype = torch.long).to(device)
+    true = torch.tensor([], dtype = torch.long).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        for images, labels in loader:
+            # make prediction
+            for i, l in zip(images, labels):
+                img = i.numpy().astype(np.uint8).transpose(2, 1, 0)
+                splits = filter_subimages(
+                    split_image(
+                        draw_masked_image(
+                            img, find_object_boundary_canny(img, dilate_size=3)
+                        ),
+                        nsplits=nsplits
+                    )
+                )
+                splits = torch.tensor(np.array(splits).transpose(0, 3, 2, 1)).float().to(device)
+                if device is not None:
+                    splits = splits.to(device)
+                outputs = model(splits)
+
+                # make predictions on each split and take prediction with most votes
+                _, predicted = torch.max(outputs.data, 1)
+                predicted = torch.bincount(predicted).argmax() # majority vote
+                predictions = torch.cat((predictions, predicted.reshape(1)))
+
+            # true labels
+            if device is not None:
+                labels = labels.to(device)
             true = torch.cat((true, labels))
 
     if save:

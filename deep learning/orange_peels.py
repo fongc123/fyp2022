@@ -22,6 +22,7 @@ class Constants:
     IMG_SIZE=(504,378)
     # IMG_MAG=0.125
     IMG_MAG=1
+    IMG_CON=0.1 # image contrast
 
     # model constants
     RESNET_MEAN=np.array([0.485, 0.456, 0.406])
