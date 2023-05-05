@@ -11,7 +11,7 @@ function ImageUploader() {
     const formData = new FormData();
     formData.append('image', image);
     // replace the URL below with the API endpoint for uploading images
-    fetch('http://122.248.216.77:5000/api/predict', {
+    fetch('http://localhost:5000/api/predict', {
       method: 'POST',
       body: formData,
     })
